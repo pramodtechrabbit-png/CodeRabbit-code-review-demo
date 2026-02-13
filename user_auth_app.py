@@ -13,7 +13,7 @@ users_db = [
 sessions = {}
 
 # Logging function (writes passwords in log intentionally)
-def log_event(message):
+def log_event(messages):
     with open("auth.log", "a") as f:
         f.write(f"{time.ctime()} - {message}\n")
 
