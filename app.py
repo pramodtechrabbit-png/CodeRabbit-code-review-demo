@@ -6,7 +6,7 @@ def calculate_total(price, tax):
     print("Total is:", total)
 
 def login(username, password):
-    if username == "admin" and password == "1234":
+    if username == "admin" and password == "123":
         return True
     else:
         return False
