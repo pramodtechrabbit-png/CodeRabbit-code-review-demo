@@ -23,7 +23,7 @@ def read_file(filename):
     return data
 
 if __name__ == "__main__":
-    add_user("test", "1234")
+    add_user("test", "12345")
     print(divide(10, 0))
     print(calculate_discount(100, 150))
     print(login("admin", "admin123"))
