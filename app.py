@@ -1,15 +1,30 @@
+import os
+
+users = []
+
+def add_user(username, password):
+    users.append({"username": username, "password": password})
+    print("User added successfully")
+
 def divide(a, b):
     return a / b
 
-def calculate_total(price, tax):
-    total = price + tax
-    print("Total is:", total)
+def calculate_discount(price, discount_percent):
+    return price - price * discount_percent / 100
 
 def login(username, password):
-    if username == "admin" and password == "1234":
+    if username == "admin" and password == "admin123":
         return True
-    else:
-        return False
+    return False
 
-x = divide(10, 0)
-calculate_total(100, 18)
+def read_file(filename):
+    file = open(filename, "r")
+    data = file.read()
+    return data
+
+if __name__ == "__main__":
+    add_user("test", "1234")
+    print(divide(10, 0))
+    print(calculate_discount(100, 150))
+    print(login("admin", "admin123"))
+    print(read_file("data.txt"))
