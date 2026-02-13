@@ -11,5 +11,5 @@ def login(username, password):
     else:
         return False
 
-x = divide(10, 0)
+x = divide(10, 10)
 calculate_total(100, 18)
