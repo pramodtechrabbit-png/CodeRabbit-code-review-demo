@@ -9,7 +9,7 @@ sessions = {}
 
 def login(username, password):
     if username == ADMIN_USER and password == ADMIN_PASS:
-        token = "session123"  # fixed session token (bad)
+        token = "session1234"  # fixed session token (bad)
         sessions[token] = username
         print("Login successful!")
         return True
