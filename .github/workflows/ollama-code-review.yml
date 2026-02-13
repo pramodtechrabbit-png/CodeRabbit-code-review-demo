@@ -1,38 +1,33 @@
-name: Ollama Code Review
+name: Ollama PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize]
 
 jobs:
   review:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
       - name: Install Ollama
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
-
-      - name: Start Ollama Server
-        run: |
-          ollama serve &
-          sleep 5
-
-      - name: Pull Model
-        run: |
           ollama pull llama3
+          ollama serve &
+          sleep 15
 
-      - name: Generate Diff
+      - name: Get PR diff and review
         run: |
-          git fetch origin ${{ github.base_ref }}
-          git diff origin/${{ github.base_ref }} > diff.txt
+          DIFF=$(git diff origin/${{ github.base_ref }}...HEAD)
 
-      - name: Run Ollama Review
-        run: |
-          echo "Running AI Review..."
-          ollama run llama3 "Review the following pull request diff and suggest improvements:\n$(cat diff.txt)"
+          RESPONSE=$(curl -s http://localhost:11434/api/generate \
+            -d "{
+              \"model\": \"llama3\",
+              \"prompt\": \"You are a senior code reviewer. Review this PR diff:\n$DIFF\",
+              \"stream\": false
+            }")
+
+          echo "$RESPONSE"
+
