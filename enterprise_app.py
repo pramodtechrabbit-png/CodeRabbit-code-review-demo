@@ -4,7 +4,7 @@ import random
 import time
 import hashlib
 import sqlite3
-from datetime import datetime
+
 
 # =====================================================
 # GLOBAL STATE (Bad Practice)
