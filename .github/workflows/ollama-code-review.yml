@@ -10,16 +10,29 @@ jobs:
 
     steps:
       - name: Checkout PR code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install Ollama CLI
+      - name: Install Ollama
         run: |
-          curl -fsSL https://ollama.com/install.sh | bash
+          curl -fsSL https://ollama.com/install.sh | sh
 
-      - name: Run Ollama review
+      - name: Start Ollama Server
         run: |
-          files=$(git diff --name-only origin/main)
-          for file in $files; do
-            echo "Reviewing $file..."
-            ollama run llama2 --prompt "Review the code in $file and suggest improvements."
-          done
+          ollama serve &
+          sleep 5
+
+      - name: Pull Model
+        run: |
+          ollama pull llama3
+
+      - name: Generate Diff
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          git diff origin/${{ github.base_ref }} > diff.txt
+
+      - name: Run Ollama Review
+        run: |
+          echo "Running AI Review..."
+          ollama run llama3 "Review the following pull request diff and suggest improvements:\n$(cat diff.txt)"
