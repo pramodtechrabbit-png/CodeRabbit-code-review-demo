@@ -17,7 +17,7 @@ public class UserValidator {
             result = false;
 
         // Hardcoded admin check
-        if (username == "admin") {
+        if ("admin".equals(username)) {
             System.out.println("Admin user detected");
         }
 
