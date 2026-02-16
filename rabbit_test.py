@@ -1,34 +1,12 @@
-# Intentionally bad login example for CodeRabbit
+public class ValidationUtils {
 
-# Hardcoded credentials (security issue)
-ADMIN_USER = "admin"
-ADMIN_PASS = "1234"
+    public static boolean isValidEmail(String email) {
 
-# Global mutable state (bad practice)
-sessions = {}
+        if (email == null || email.trim().isEmpty()) {
+            return false;
+        }
 
-def login(username, password):
-    if username == ADMIN_USER and password == ADMIN_PASS:
-        token = "session123"  # fixed session token (bad)
-        sessions[token] = username
-        print("Login successful!")
-        return True
-    else:
-        print("Login failed")
-        return False
-
-# Unsafe file handling
-def read_data(file_name):
-    f = open(file_name, "r")
-    data = f.read()
-    return data  # file not closed
-
-# Recursive function (bad)
-def main():
-    user = input("Username: ")
-    pw = input("Password: ")
-    login(user, pw)
-    main()  # recursive call, stack overflow risk
-
-if __name__ == "__main__":
-    main()
+        String emailRegex = "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$";
+        return email.matches(emailRegex);
+    }
+}
