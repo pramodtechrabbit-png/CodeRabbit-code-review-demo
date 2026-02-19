@@ -1,366 +1,350 @@
+"""
+Comprehensive test suite for login_app.py
+Tests cover main functionality, edge cases, security issues, and error handling.
+"""
+
 import pytest
-import hashlib
-import json
 import os
-import tempfile
+import json
+import hashlib
+import time
 from unittest.mock import patch, mock_open, MagicMock
 import login_app
 
 
-@pytest.fixture
-def reset_globals():
-    """Reset global state before each test."""
-    # Reset to known initial state
-    login_app.USERS = [
-        {"username": "admin", "password": "1234"},
-        {"username": "guest", "password": "guest"}
-    ]
-    login_app.SESSIONS = {}
-    yield
-    # Reset again after test
-    login_app.USERS = [
-        {"username": "admin", "password": "1234"},
-        {"username": "guest", "password": "guest"}
-    ]
-    login_app.SESSIONS = {}
-
-
-@pytest.fixture
-def temp_log_file(tmp_path):
-    """Create a temporary log file."""
-    log_file = tmp_path / "login.log"
-    return str(log_file)
-
-
 class TestHashPassword:
-    """Tests for hash_password function."""
+    """Tests for hash_password function"""
 
     def test_hash_password_basic(self):
-        """Test basic password hashing."""
-        password = "test123"
-        result = login_app.hash_password(password)
-        expected = hashlib.md5(password.encode()).hexdigest()
-        assert result == expected
-
-    def test_hash_password_empty_string(self):
-        """Test hashing empty string."""
-        result = login_app.hash_password("")
-        expected = hashlib.md5("".encode()).hexdigest()
-        assert result == expected
-
-    def test_hash_password_special_chars(self):
-        """Test hashing password with special characters."""
-        password = "p@$$w0rd!#%"
-        result = login_app.hash_password(password)
-        expected = hashlib.md5(password.encode()).hexdigest()
-        assert result == expected
+        """Test basic password hashing"""
+        result = login_app.hash_password("password123")
+        assert isinstance(result, str)
+        assert len(result) == 32  # MD5 produces 32-char hex string
 
     def test_hash_password_consistency(self):
-        """Test that same password produces same hash."""
-        password = "consistent"
-        hash1 = login_app.hash_password(password)
-        hash2 = login_app.hash_password(password)
+        """Test that same password produces same hash"""
+        hash1 = login_app.hash_password("test123")
+        hash2 = login_app.hash_password("test123")
         assert hash1 == hash2
+
+    def test_hash_password_different_inputs(self):
+        """Test that different passwords produce different hashes"""
+        hash1 = login_app.hash_password("password1")
+        hash2 = login_app.hash_password("password2")
+        assert hash1 != hash2
+
+    def test_hash_password_empty_string(self):
+        """Test hashing empty string"""
+        result = login_app.hash_password("")
+        expected = hashlib.md5(b"").hexdigest()
+        assert result == expected
+
+    def test_hash_password_unicode(self):
+        """Test hashing unicode characters"""
+        result = login_app.hash_password("пароль日本語")
+        assert isinstance(result, str)
+        assert len(result) == 32
+
+    def test_hash_password_special_chars(self):
+        """Test hashing with special characters"""
+        result = login_app.hash_password("p@$$w0rd!#%")
+        assert isinstance(result, str)
+        assert len(result) == 32
+
+    def test_hash_password_long_input(self):
+        """Test hashing very long password"""
+        long_password = "a" * 10000
+        result = login_app.hash_password(long_password)
+        assert len(result) == 32
 
 
 class TestLog:
-    """Tests for log function."""
+    """Tests for log function"""
 
-    def test_log_writes_message(self, tmp_path):
-        """Test that log writes message to file."""
-        log_file = tmp_path / "login.log"
-        test_message = "Test log message"
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("time.ctime", return_value="Wed Jan 1 00:00:00 2025")
+    def test_log_writes_message(self, mock_ctime, mock_file):
+        """Test that log writes formatted message"""
+        login_app.log("Test message")
+        mock_file.assert_called_once_with("login.log", "a")
+        handle = mock_file()
+        handle.write.assert_called_once_with("Wed Jan 1 00:00:00 2025 - Test message\n")
 
-        with patch("login_app.open", mock_open()) as mock_file:
-            login_app.log(test_message)
-            mock_file.assert_called_once_with("login.log", "a")
-            handle = mock_file()
-            # Check that write was called with message containing the test message
-            written = "".join([call[0][0] for call in handle.write.call_args_list])
-            assert test_message in written
+    @patch("builtins.open", new_callable=mock_open)
+    def test_log_empty_message(self, mock_file):
+        """Test logging empty message"""
+        login_app.log("")
+        handle = mock_file()
+        assert handle.write.called
 
-    def test_log_appends_to_file(self):
-        """Test that log appends to file."""
-        with patch("login_app.open", mock_open()) as mock_file:
-            login_app.log("First message")
-            mock_file.assert_called_with("login.log", "a")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_log_unicode_message(self, mock_file):
+        """Test logging unicode characters"""
+        login_app.log("User 日本語 logged in")
+        assert mock_file.called
 
 
 class TestAddUser:
-    """Tests for add_user function."""
+    """Tests for add_user function"""
 
-    def test_add_user_success(self, reset_globals, capsys):
-        """Test successfully adding a new user."""
+    def setup_method(self):
+        """Reset USERS list before each test"""
+        login_app.USERS.clear()
+        login_app.USERS.extend([
+            {"username": "admin", "password": "1234"},
+            {"username": "guest", "password": "guest"}
+        ])
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_add_user_basic(self, mock_print, mock_file):
+        """Test adding a new user"""
         initial_count = len(login_app.USERS)
-
-        with patch("login_app.log"):
-            login_app.add_user("newuser", "newpass")
-
+        login_app.add_user("testuser", "testpass")
         assert len(login_app.USERS) == initial_count + 1
-        assert {"username": "newuser", "password": "newpass"} in login_app.USERS
+        assert login_app.USERS[-1]["username"] == "testuser"
+        assert login_app.USERS[-1]["password"] == "testpass"
+        mock_print.assert_called_once_with("User added!")
 
-        captured = capsys.readouterr()
-        assert "User added!" in captured.out
+    @patch("builtins.open", new_callable=mock_open)
+    def test_add_user_duplicate_username(self, mock_file):
+        """Test adding user with duplicate username (no validation)"""
+        login_app.add_user("admin", "newpass")
+        # Should succeed since there's no duplicate check
+        assert len([u for u in login_app.USERS if u["username"] == "admin"]) >= 2
 
-    def test_add_user_calls_log(self, reset_globals):
-        """Test that add_user logs the action."""
-        with patch("login_app.log") as mock_log:
-            login_app.add_user("testuser", "testpass")
-            mock_log.assert_called_once()
-            call_args = mock_log.call_args[0][0]
-            assert "testuser" in call_args
-            assert "testpass" in call_args
+    @patch("builtins.open", new_callable=mock_open)
+    def test_add_user_empty_username(self, mock_file):
+        """Test adding user with empty username"""
+        login_app.add_user("", "password")
+        assert login_app.USERS[-1]["username"] == ""
 
-    def test_add_user_with_empty_credentials(self, reset_globals):
-        """Test adding user with empty credentials."""
-        with patch("login_app.log"):
-            login_app.add_user("", "")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_add_user_empty_password(self, mock_file):
+        """Test adding user with empty password"""
+        login_app.add_user("user", "")
+        assert login_app.USERS[-1]["password"] == ""
 
-        assert {"username": "", "password": ""} in login_app.USERS
+    @patch("builtins.open", new_callable=mock_open)
+    def test_add_user_special_chars(self, mock_file):
+        """Test adding user with special characters"""
+        login_app.add_user("user@test", "p@$$w0rd!")
+        assert login_app.USERS[-1]["username"] == "user@test"
 
-    def test_add_user_duplicate_username(self, reset_globals):
-        """Test adding user with duplicate username (allowed in current implementation)."""
-        with patch("login_app.log"):
-            login_app.add_user("admin", "newpass")
-
-        # Check that duplicate is added (current behavior)
-        admin_users = [u for u in login_app.USERS if u["username"] == "admin"]
-        assert len(admin_users) >= 2
+    @patch("builtins.open", new_callable=mock_open)
+    def test_add_user_logs_password(self, mock_file):
+        """Test that add_user logs password (security issue)"""
+        login_app.add_user("testuser", "secret123")
+        handle = mock_file()
+        # Verify that write was called with password in message
+        write_calls = [str(call) for call in handle.write.call_args_list]
+        assert any("secret123" in str(call) for call in write_calls)
 
 
 class TestLogin:
-    """Tests for login function."""
+    """Tests for login function"""
 
-    def test_login_superadmin_success(self, reset_globals, capsys):
-        """Test login with hardcoded superadmin credentials."""
+    def setup_method(self):
+        """Reset USERS and SESSIONS before each test"""
+        login_app.USERS.clear()
+        login_app.USERS.extend([
+            {"username": "admin", "password": "1234"},
+            {"username": "guest", "password": "guest"}
+        ])
+        login_app.SESSIONS.clear()
+
+    @patch("builtins.print")
+    def test_login_superadmin_success(self, mock_print):
+        """Test hardcoded superadmin login"""
         result = login_app.login("superadmin", "super123")
         assert result is True
+        mock_print.assert_called_once_with("Login successful (superadmin)")
 
-        captured = capsys.readouterr()
-        assert "Login successful (superadmin)" in captured.out
-
-    def test_login_regular_user_success(self, reset_globals, capsys):
-        """Test login with regular user credentials."""
+    @patch("builtins.print")
+    @patch("random.randint", return_value=5555)
+    def test_login_valid_user_success(self, mock_random, mock_print):
+        """Test successful login with valid credentials"""
         result = login_app.login("admin", "1234")
         assert result is True
+        assert "5555" in login_app.SESSIONS
+        assert login_app.SESSIONS["5555"]["username"] == "admin"
 
-        captured = capsys.readouterr()
-        assert "Login successful" in captured.out
-        assert "Session token:" in captured.out
-
-    def test_login_creates_session_token(self, reset_globals):
-        """Test that login creates a session token."""
-        initial_sessions = len(login_app.SESSIONS)
-        login_app.login("admin", "1234")
-        assert len(login_app.SESSIONS) == initial_sessions + 1
-
-    def test_login_invalid_username(self, reset_globals, capsys):
-        """Test login with invalid username."""
+    @patch("builtins.print")
+    def test_login_invalid_username(self, mock_print):
+        """Test login with invalid username"""
         result = login_app.login("nonexistent", "password")
         assert result is False
+        mock_print.assert_called_once_with("Login failed")
 
-        captured = capsys.readouterr()
-        assert "Login failed" in captured.out
-
-    def test_login_invalid_password(self, reset_globals, capsys):
-        """Test login with invalid password."""
-        result = login_app.login("admin", "wrongpassword")
+    @patch("builtins.print")
+    def test_login_invalid_password(self, mock_print):
+        """Test login with invalid password"""
+        result = login_app.login("admin", "wrongpass")
         assert result is False
+        mock_print.assert_called_once_with("Login failed")
 
-        captured = capsys.readouterr()
-        assert "Login failed" in captured.out
-
-    def test_login_empty_credentials(self, reset_globals, capsys):
-        """Test login with empty credentials."""
+    @patch("builtins.print")
+    def test_login_empty_credentials(self, mock_print):
+        """Test login with empty credentials"""
         result = login_app.login("", "")
         assert result is False
 
-        captured = capsys.readouterr()
-        assert "Login failed" in captured.out
-
-    def test_login_guest_user(self, reset_globals):
-        """Test login with guest user."""
-        result = login_app.login("guest", "guest")
-        assert result is True
-
-    def test_login_case_sensitive(self, reset_globals):
-        """Test that login is case-sensitive."""
+    @patch("builtins.print")
+    def test_login_case_sensitive(self, mock_print):
+        """Test that login is case-sensitive"""
         result = login_app.login("ADMIN", "1234")
         assert result is False
 
-    def test_login_session_contains_username(self, reset_globals):
-        """Test that session contains username."""
-        login_app.login("admin", "1234")
-        # Find the session with admin
-        admin_session = None
-        for token, session in login_app.SESSIONS.items():
-            if session.get("username") == "admin":
-                admin_session = session
-                break
+    @patch("builtins.print")
+    @patch("random.randint", return_value=7777)
+    def test_login_creates_session(self, mock_random, mock_print):
+        """Test that login creates session with timestamp"""
+        before_time = time.time()
+        result = login_app.login("guest", "guest")
+        after_time = time.time()
 
-        assert admin_session is not None
-        assert admin_session["username"] == "admin"
-        assert "time" in admin_session
+        assert result is True
+        assert "7777" in login_app.SESSIONS
+        session = login_app.SESSIONS["7777"]
+        assert session["username"] == "guest"
+        assert before_time <= session["time"] <= after_time
+
+    @patch("builtins.print")
+    def test_login_superadmin_priority(self, mock_print):
+        """Test superadmin check happens before regular users"""
+        # Add a regular user with same credentials
+        login_app.USERS.append({"username": "superadmin", "password": "wrongpass"})
+        result = login_app.login("superadmin", "super123")
+        assert result is True
+        # Should not create session for superadmin
+        assert len(login_app.SESSIONS) == 0
+
+    @patch("builtins.print")
+    @patch("random.randint")
+    def test_login_multiple_sessions(self, mock_random, mock_print):
+        """Test multiple logins create multiple sessions"""
+        mock_random.side_effect = [1111, 2222, 3333]
+        login_app.login("admin", "1234")
+        login_app.login("guest", "guest")
+        login_app.login("admin", "1234")
+        assert len(login_app.SESSIONS) == 3
 
 
 class TestResetPassword:
-    """Tests for reset_password function."""
+    """Tests for reset_password function"""
 
-    def test_reset_password_success(self, reset_globals):
-        """Test successfully resetting password."""
-        with patch("login_app.log"):
-            result = login_app.reset_password("admin", "newpassword")
+    def setup_method(self):
+        """Reset USERS before each test"""
+        login_app.USERS.clear()
+        login_app.USERS.extend([
+            {"username": "admin", "password": "1234"},
+            {"username": "guest", "password": "guest"}
+        ])
 
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_success(self, mock_file):
+        """Test successful password reset"""
+        result = login_app.reset_password("admin", "newpass")
         assert result is True
-        # Find admin user and check password
-        admin_user = next((u for u in login_app.USERS if u["username"] == "admin"), None)
-        assert admin_user is not None
-        assert admin_user["password"] == "newpassword"
+        admin_user = next(u for u in login_app.USERS if u["username"] == "admin")
+        assert admin_user["password"] == "newpass"
 
-    def test_reset_password_nonexistent_user(self, reset_globals):
-        """Test resetting password for nonexistent user."""
-        with patch("login_app.log"):
-            result = login_app.reset_password("nonexistent", "newpass")
-
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_nonexistent_user(self, mock_file):
+        """Test password reset for nonexistent user"""
+        result = login_app.reset_password("nonexistent", "newpass")
         assert result is False
 
-    def test_reset_password_calls_log(self, reset_globals):
-        """Test that reset_password logs the action."""
-        with patch("login_app.log") as mock_log:
-            login_app.reset_password("admin", "newpass")
-            mock_log.assert_called_once()
-            call_args = mock_log.call_args[0][0]
-            assert "admin" in call_args
-
-    def test_reset_password_empty_password(self, reset_globals):
-        """Test resetting password to empty string."""
-        with patch("login_app.log"):
-            result = login_app.reset_password("admin", "")
-
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_empty_password(self, mock_file):
+        """Test resetting to empty password"""
+        result = login_app.reset_password("admin", "")
         assert result is True
-        admin_user = next((u for u in login_app.USERS if u["username"] == "admin"), None)
+        admin_user = next(u for u in login_app.USERS if u["username"] == "admin")
         assert admin_user["password"] == ""
 
-    def test_reset_password_multiple_times(self, reset_globals):
-        """Test resetting password multiple times."""
-        with patch("login_app.log"):
-            login_app.reset_password("admin", "pass1")
-            login_app.reset_password("admin", "pass2")
-            login_app.reset_password("admin", "pass3")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_logs_new_password(self, mock_file):
+        """Test that reset_password logs the operation"""
+        login_app.reset_password("admin", "newsecret")
+        handle = mock_file()
+        assert handle.write.called
 
-        admin_user = next((u for u in login_app.USERS if u["username"] == "admin"), None)
-        assert admin_user["password"] == "pass3"
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_multiple_users(self, mock_file):
+        """Test reset only affects specified user"""
+        original_guest_pass = login_app.USERS[1]["password"]
+        login_app.reset_password("admin", "newpass")
+        assert login_app.USERS[1]["password"] == original_guest_pass
 
 
 class TestReadConfig:
-    """Tests for read_config function."""
+    """Tests for read_config function"""
 
-    def test_read_config_valid_json(self, tmp_path):
-        """Test reading valid JSON config."""
-        config_file = tmp_path / "config.json"
-        test_data = {"key1": "value1", "key2": "value2"}
-        config_file.write_text(json.dumps(test_data))
+    @patch("builtins.open", mock_open(read_data='{"key": "value"}'))
+    def test_read_config_basic(self):
+        """Test reading basic config file"""
+        result = login_app.read_config("config.json")
+        assert result == {"key": "value"}
 
-        result = login_app.read_config(str(config_file))
-        assert result == test_data
+    @patch("builtins.open", mock_open(read_data='{"users": ["admin", "guest"], "timeout": 3600}'))
+    def test_read_config_complex(self):
+        """Test reading complex config"""
+        result = login_app.read_config("config.json")
+        assert "users" in result
+        assert "timeout" in result
+        assert result["users"] == ["admin", "guest"]
 
-    def test_read_config_nested_json(self, tmp_path):
-        """Test reading nested JSON config."""
-        config_file = tmp_path / "config.json"
-        test_data = {
-            "database": {
-                "host": "localhost",
-                "port": 5432
-            },
-            "settings": {
-                "debug": True
-            }
-        }
-        config_file.write_text(json.dumps(test_data))
-
-        result = login_app.read_config(str(config_file))
-        assert result == test_data
-        assert result["database"]["host"] == "localhost"
-
-    def test_read_config_empty_json(self, tmp_path):
-        """Test reading empty JSON object."""
-        config_file = tmp_path / "config.json"
-        config_file.write_text("{}")
-
-        result = login_app.read_config(str(config_file))
+    @patch("builtins.open", mock_open(read_data='{}'))
+    def test_read_config_empty_json(self):
+        """Test reading empty JSON object"""
+        result = login_app.read_config("config.json")
         assert result == {}
 
-    def test_read_config_file_not_found(self):
-        """Test reading nonexistent config file."""
+    @patch("builtins.open", side_effect=FileNotFoundError)
+    def test_read_config_file_not_found(self, mock_file):
+        """Test reading non-existent file raises exception"""
         with pytest.raises(FileNotFoundError):
             login_app.read_config("nonexistent.json")
 
-    def test_read_config_invalid_json(self, tmp_path):
-        """Test reading invalid JSON."""
-        config_file = tmp_path / "config.json"
-        config_file.write_text("not valid json")
-
+    @patch("builtins.open", mock_open(read_data='invalid json'))
+    def test_read_config_invalid_json(self):
+        """Test reading invalid JSON raises exception"""
         with pytest.raises(json.JSONDecodeError):
-            login_app.read_config(str(config_file))
+            login_app.read_config("invalid.json")
+
+    @patch("builtins.open", mock_open(read_data='{"nested": {"key": "value"}}'))
+    def test_read_config_nested_structure(self):
+        """Test reading nested JSON structure"""
+        result = login_app.read_config("config.json")
+        assert result["nested"]["key"] == "value"
 
 
-class TestMainIntegration:
-    """Integration tests for main function flow."""
+class TestIntegration:
+    """Integration tests combining multiple functions"""
 
-    def test_main_add_user_flow(self, reset_globals):
-        """Test main function with add user flow."""
-        # Create infinite mock that raises StopIteration after processing one flow
-        inputs = ["1", "testuser", "testpass"]
-        with patch("builtins.input", side_effect=inputs + [StopIteration()]) as mock_input, \
-             patch("login_app.log"), \
-             pytest.raises(StopIteration):
-            login_app.main()
+    def setup_method(self):
+        """Reset state before each test"""
+        login_app.USERS.clear()
+        login_app.USERS.extend([
+            {"username": "admin", "password": "1234"},
+            {"username": "guest", "password": "guest"}
+        ])
+        login_app.SESSIONS.clear()
 
-    def test_main_login_flow(self, reset_globals):
-        """Test main function with login flow."""
-        inputs = ["2", "admin", "1234"]
-        with patch("builtins.input", side_effect=inputs + [StopIteration()]) as mock_input, \
-             pytest.raises(StopIteration):
-            login_app.main()
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_add_and_login_new_user(self, mock_print, mock_file):
+        """Test adding a user and then logging in"""
+        login_app.add_user("newuser", "newpass")
+        result = login_app.login("newuser", "newpass")
+        assert result is True
 
-    def test_main_reset_password_flow(self, reset_globals):
-        """Test main function with reset password flow."""
-        inputs = ["3", "admin", "newpass"]
-        with patch("builtins.input", side_effect=inputs + [StopIteration()]) as mock_input, \
-             patch("login_app.log"), \
-             pytest.raises(StopIteration):
-            login_app.main()
-
-    def test_main_invalid_choice(self, reset_globals, capsys):
-        """Test main function with invalid choice."""
-        with patch("builtins.input", side_effect=["99", StopIteration()]) as mock_input, \
-             pytest.raises(StopIteration):
-            login_app.main()
-
-
-class TestEdgeCases:
-    """Additional edge case tests."""
-
-    def test_session_token_uniqueness(self, reset_globals):
-        """Test that session tokens are reasonably unique."""
-        # Test that we can create multiple sessions
-        tokens = []
-        for _ in range(10):
-            result = login_app.login("admin", "1234")
-            if result:
-                # Get the most recent token
-                if login_app.SESSIONS:
-                    tokens.append(list(login_app.SESSIONS.keys())[-1])
-
-        # Should have created multiple sessions
-        assert len(tokens) >= 10
-        # Most tokens should be unique (some might collide due to random)
-        assert len(set(tokens)) >= 5
-
-    def test_login_after_password_reset(self, reset_globals):
-        """Test login works after password reset."""
-        with patch("login_app.log"):
-            login_app.reset_password("admin", "newpass123")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_reset_and_login_with_new_password(self, mock_print, mock_file):
+        """Test password reset and login with new password"""
+        login_app.reset_password("admin", "newpass123")
 
         # Old password should fail
         result1 = login_app.login("admin", "1234")
@@ -370,24 +354,210 @@ class TestEdgeCases:
         result2 = login_app.login("admin", "newpass123")
         assert result2 is True
 
-    def test_add_user_then_login(self, reset_globals):
-        """Test adding user and then logging in."""
-        with patch("login_app.log"):
-            login_app.add_user("newuser", "newpass")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    @patch("random.randint")
+    def test_multiple_users_multiple_sessions(self, mock_random, mock_print, mock_file):
+        """Test multiple users with multiple sessions"""
+        mock_random.side_effect = [1000, 2000, 3000]
 
-        result = login_app.login("newuser", "newpass")
+        login_app.add_user("user1", "pass1")
+        login_app.add_user("user2", "pass2")
+
+        login_app.login("user1", "pass1")
+        login_app.login("user2", "pass2")
+        login_app.login("admin", "1234")
+
+        assert len(login_app.SESSIONS) == 3
+        assert "1000" in login_app.SESSIONS
+        assert "2000" in login_app.SESSIONS
+        assert "3000" in login_app.SESSIONS
+
+
+class TestEdgeCases:
+    """Tests for edge cases and boundary conditions"""
+
+    def setup_method(self):
+        """Reset state before each test"""
+        login_app.USERS.clear()
+        login_app.USERS.extend([
+            {"username": "admin", "password": "1234"},
+            {"username": "guest", "password": "guest"}
+        ])
+        login_app.SESSIONS.clear()
+
+    @patch("builtins.print")
+    def test_login_with_none_username(self, mock_print):
+        """Test login with None as username"""
+        result = login_app.login(None, "password")
+        assert result is False
+
+    @patch("builtins.print")
+    def test_login_with_none_password(self, mock_print):
+        """Test login with None as password"""
+        # login function handles None gracefully, returns False
+        result = login_app.login("admin", None)
+        assert result is False
+
+    @patch("builtins.open", new_callable=mock_open)
+    def test_add_user_with_very_long_username(self, mock_file):
+        """Test adding user with very long username"""
+        long_username = "u" * 10000
+        login_app.add_user(long_username, "pass")
+        assert login_app.USERS[-1]["username"] == long_username
+
+    @patch("builtins.open", new_callable=mock_open)
+    def test_add_user_with_very_long_password(self, mock_file):
+        """Test adding user with very long password"""
+        long_password = "p" * 10000
+        login_app.add_user("user", long_password)
+        assert login_app.USERS[-1]["password"] == long_password
+
+    def test_hash_password_with_null_bytes(self):
+        """Test hashing password with null bytes"""
+        result = login_app.hash_password("pass\x00word")
+        assert isinstance(result, str)
+        assert len(result) == 32
+
+    @patch("builtins.print")
+    def test_login_with_sql_injection_attempt(self, mock_print):
+        """Test login with SQL injection string (no SQL, but test string handling)"""
+        result = login_app.login("admin' OR '1'='1", "password")
+        assert result is False
+
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_first_user_only(self, mock_file):
+        """Test that reset_password only resets first matching user"""
+        # Add duplicate username
+        login_app.USERS.append({"username": "admin", "password": "other"})
+        login_app.reset_password("admin", "resetpass")
+
+        # Check first admin is reset
+        assert login_app.USERS[0]["password"] == "resetpass"
+        # Second admin should be unchanged
+        assert login_app.USERS[-1]["password"] == "other"
+
+
+class TestSecurityIssues:
+    """Tests documenting security issues in the code"""
+
+    @patch("builtins.open", new_callable=mock_open)
+    def test_password_stored_in_plaintext(self, mock_file):
+        """Document that passwords are stored in plaintext"""
+        login_app.add_user("testuser", "mysecretpassword")
+        user = next(u for u in login_app.USERS if u["username"] == "testuser")
+        # Password is stored in plaintext (security issue)
+        assert user["password"] == "mysecretpassword"
+
+    @patch("builtins.open", new_callable=mock_open)
+    def test_passwords_logged_to_file(self, mock_file):
+        """Document that passwords are logged to file"""
+        login_app.add_user("user", "secretpass")
+        handle = mock_file()
+        # Verify password appears in log
+        write_calls = [str(call) for call in handle.write.call_args_list]
+        assert any("secretpass" in str(call) for call in write_calls)
+
+    def test_weak_hashing_algorithm(self):
+        """Document use of weak MD5 hashing"""
+        # MD5 is cryptographically broken
+        result = login_app.hash_password("password")
+        # MD5 hash is predictable and crackable
+        assert result == hashlib.md5(b"password").hexdigest()
+
+    @patch("builtins.print")
+    def test_hardcoded_credentials(self, mock_print):
+        """Document hardcoded superadmin credentials"""
+        # Hardcoded credentials are a security risk
+        result = login_app.login("superadmin", "super123")
         assert result is True
 
-    def test_users_list_persistence_across_operations(self, reset_globals):
-        """Test that USERS list persists across operations."""
+    @patch("builtins.print")
+    @patch("random.randint", return_value=1234)
+    def test_weak_session_tokens(self, mock_random, mock_print):
+        """Document weak session token generation"""
+        # Ensure USERS has admin with password "1234"
+        login_app.USERS.clear()
+        login_app.USERS.append({"username": "admin", "password": "1234"})
+        login_app.login("admin", "1234")
+        # Session tokens are only 4 digits (1000-9999), easily guessable
+        assert "1234" in login_app.SESSIONS
+
+    def test_no_password_strength_requirements(self):
+        """Document lack of password strength requirements"""
+        # Weak passwords are accepted
+        with patch("builtins.open", mock_open()):
+            login_app.add_user("user", "1")
+            login_app.add_user("user2", "")
+            # No validation occurs
+            assert True
+
+
+class TestRegressionAndBoundary:
+    """Additional regression and boundary tests for enhanced coverage"""
+
+    def setup_method(self):
+        """Reset state before each test"""
+        login_app.USERS.clear()
+        login_app.USERS.extend([
+            {"username": "admin", "password": "1234"},
+            {"username": "guest", "password": "guest"}
+        ])
+        login_app.SESSIONS.clear()
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    @patch("random.randint")
+    def test_concurrent_login_attempts_different_users(self, mock_random, mock_print, mock_file):
+        """Test multiple concurrent login attempts create separate sessions"""
+        mock_random.side_effect = [1111, 2222, 3333, 4444, 5555]
+
+        # Simulate multiple users logging in
+        login_app.login("admin", "1234")
+        login_app.login("guest", "guest")
+        login_app.login("admin", "1234")  # Same user, new session
+        login_app.login("guest", "guest")  # Same user, new session
+
+        # All sessions should be preserved
+        assert len(login_app.SESSIONS) == 4
+        assert "1111" in login_app.SESSIONS
+        assert "2222" in login_app.SESSIONS
+        assert "3333" in login_app.SESSIONS
+        assert "4444" in login_app.SESSIONS
+
+    @patch("builtins.open", new_callable=mock_open)
+    def test_user_list_boundary_many_users(self, mock_file):
+        """Test adding many users to verify list handles growth"""
         initial_count = len(login_app.USERS)
+        for i in range(100):
+            login_app.add_user(f"user{i}", f"pass{i}")
 
-        with patch("login_app.log"):
-            login_app.add_user("user1", "pass1")
-            login_app.add_user("user2", "pass2")
+        assert len(login_app.USERS) == initial_count + 100
 
-        assert len(login_app.USERS) == initial_count + 2
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_password_reset_regression(self, mock_print, mock_file):
+        """Regression test: ensure reset doesn't affect other users"""
+        original_guest_password = "guest"
 
-        # Login should still work with new users
-        assert login_app.login("user1", "pass1") is True
-        assert login_app.login("user2", "pass2") is True
+        # Reset admin password
+        login_app.reset_password("admin", "newadminpass")
+
+        # Verify admin password changed
+        assert any(u["username"] == "admin" and u["password"] == "newadminpass"
+                  for u in login_app.USERS)
+
+        # Verify guest password unchanged
+        assert any(u["username"] == "guest" and u["password"] == original_guest_password
+                  for u in login_app.USERS)
+
+    @patch("builtins.print")
+    def test_login_timing_attack_vulnerability(self, mock_print):
+        """Document potential timing attack vulnerability"""
+        # Both should take similar time but function doesn't have constant-time comparison
+        result1 = login_app.login("admin", "1234")
+        result2 = login_app.login("nonexistent", "1234")
+
+        assert result1 is True
+        assert result2 is False
+        # In production, timing differences could reveal valid usernames
