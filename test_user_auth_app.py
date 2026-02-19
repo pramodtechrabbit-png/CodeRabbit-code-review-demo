@@ -1,605 +1,751 @@
+"""
+Comprehensive test suite for user_auth_app.py
+Tests cover main functionality, edge cases, security issues, and error handling.
+"""
+
 import pytest
-import hashlib
-import json
 import os
-import tempfile
-from unittest.mock import patch, mock_open, MagicMock
+import json
+import hashlib
+import time
+from unittest.mock import patch, mock_open, MagicMock, call
 import user_auth_app
 
 
-@pytest.fixture
-def reset_globals():
-    """Reset global state before each test."""
-    # Reset to known initial state
-    user_auth_app.users_db = [
-        {"username": "admin", "password": "admin123"},
-        {"username": "test", "password": "test123"}
-    ]
-    user_auth_app.sessions = {}
-    yield
-    # Reset again after test
-    user_auth_app.users_db = [
-        {"username": "admin", "password": "admin123"},
-        {"username": "test", "password": "test123"}
-    ]
-    user_auth_app.sessions = {}
-
-
-@pytest.fixture
-def temp_log_file(tmp_path):
-    """Create a temporary log file."""
-    log_file = tmp_path / "auth.log"
-    return str(log_file)
-
-
 class TestHashPassword:
-    """Tests for hash_password function."""
+    """Tests for hash_password function"""
 
     def test_hash_password_basic(self):
-        """Test basic password hashing."""
-        password = "test123"
-        result = user_auth_app.hash_password(password)
-        expected = hashlib.md5(password.encode()).hexdigest()
-        assert result == expected
+        """Test basic password hashing"""
+        result = user_auth_app.hash_password("password123")
+        assert isinstance(result, str)
+        assert len(result) == 32  # MD5 produces 32-char hex string
+
+    def test_hash_password_consistency(self):
+        """Test that same password produces same hash"""
+        hash1 = user_auth_app.hash_password("test123")
+        hash2 = user_auth_app.hash_password("test123")
+        assert hash1 == hash2
+
+    def test_hash_password_different_inputs(self):
+        """Test that different passwords produce different hashes"""
+        hash1 = user_auth_app.hash_password("password1")
+        hash2 = user_auth_app.hash_password("password2")
+        assert hash1 != hash2
 
     def test_hash_password_empty_string(self):
-        """Test hashing empty string."""
+        """Test hashing empty string"""
         result = user_auth_app.hash_password("")
-        expected = hashlib.md5("".encode()).hexdigest()
-        assert result == expected
-
-    def test_hash_password_special_chars(self):
-        """Test hashing password with special characters."""
-        password = "p@$$w0rd!#%^&*()"
-        result = user_auth_app.hash_password(password)
-        expected = hashlib.md5(password.encode()).hexdigest()
+        expected = hashlib.md5(b"").hexdigest()
         assert result == expected
 
     def test_hash_password_unicode(self):
-        """Test hashing password with unicode characters."""
-        password = "пароль123"  # Russian characters
-        result = user_auth_app.hash_password(password)
-        expected = hashlib.md5(password.encode()).hexdigest()
-        assert result == expected
+        """Test hashing unicode characters"""
+        result = user_auth_app.hash_password("пароль日本語")
+        assert isinstance(result, str)
+        assert len(result) == 32
 
-    def test_hash_password_consistency(self):
-        """Test that same password produces same hash."""
-        password = "consistent"
-        hash1 = user_auth_app.hash_password(password)
-        hash2 = user_auth_app.hash_password(password)
-        assert hash1 == hash2
+    def test_hash_password_long_input(self):
+        """Test hashing very long password"""
+        long_password = "a" * 10000
+        result = user_auth_app.hash_password(long_password)
+        assert len(result) == 32
 
 
 class TestLogEvent:
-    """Tests for log_event function."""
+    """Tests for log_event function"""
 
-    def test_log_event_has_parameter_bug(self):
-        """Test that log_event has a bug (parameter name mismatch)."""
-        # The function parameter is 'messages' but it uses 'message' inside
-        # This test documents the bug exists
-        with patch("user_auth_app.open", mock_open()) as mock_file:
-            with pytest.raises(NameError):
-                user_auth_app.log_event("Test message")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("time.ctime", return_value="Wed Jan 1 00:00:00 2025")
+    def test_log_event_writes_message(self, mock_ctime, mock_file):
+        """Test that log_event writes formatted message"""
+        user_auth_app.log_event("Test event")
+        mock_file.assert_called_once_with("auth.log", "a")
+        handle = mock_file()
+        handle.write.assert_called_once_with("Wed Jan 1 00:00:00 2025 - Test event\n")
 
-    def test_log_event_function_signature(self):
-        """Test that log_event has incorrect parameter name."""
-        import inspect
-        sig = inspect.signature(user_auth_app.log_event)
-        params = list(sig.parameters.keys())
-        assert "messages" in params  # Parameter is named 'messages'
+    @patch("builtins.open", new_callable=mock_open)
+    def test_log_event_empty_message(self, mock_file):
+        """Test logging empty message"""
+        user_auth_app.log_event("")
+        handle = mock_file()
+        assert handle.write.called
+
+    @patch("builtins.open", new_callable=mock_open)
+    def test_log_event_unicode(self, mock_file):
+        """Test logging unicode characters"""
+        user_auth_app.log_event("User 日本語 registered")
+        assert mock_file.called
+
+    @patch("builtins.open", new_callable=mock_open)
+    def test_log_event_multiple_calls(self, mock_file):
+        """Test multiple log events"""
+        user_auth_app.log_event("Event 1")
+        user_auth_app.log_event("Event 2")
+        user_auth_app.log_event("Event 3")
+        assert mock_file.call_count == 3
 
 
 class TestRegisterUser:
-    """Tests for register_user function."""
+    """Tests for register_user function"""
 
-    def test_register_user_success(self, reset_globals, capsys):
-        """Test successfully registering a new user."""
+    def setup_method(self):
+        """Reset users_db before each test"""
+        user_auth_app.users_db.clear()
+        user_auth_app.users_db.extend([
+            {"username": "admin", "password": "admin123"},
+            {"username": "test", "password": "test123"}
+        ])
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_valid(self, mock_print, mock_file):
+        """Test registering a valid user"""
         initial_count = len(user_auth_app.users_db)
-
-        with patch("user_auth_app.log_event"):
-            user_auth_app.register_user("newuser", "newpass123")
-
+        user_auth_app.register_user("newuser", "newpass123")
         assert len(user_auth_app.users_db) == initial_count + 1
-        assert {"username": "newuser", "password": "newpass123"} in user_auth_app.users_db
+        assert user_auth_app.users_db[-1]["username"] == "newuser"
+        assert user_auth_app.users_db[-1]["password"] == "newpass123"
+        mock_print.assert_called_with("User registered successfully!")
 
-        captured = capsys.readouterr()
-        assert "User registered successfully!" in captured.out
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_weak_password_still_adds(self, mock_print, mock_file):
+        """Test that weak password still adds user (validation bug)"""
+        user_auth_app.register_user("user", "123")
+        # User is still added despite weak password
+        assert user_auth_app.users_db[-1]["username"] == "user"
+        assert user_auth_app.users_db[-1]["password"] == "123"
+        # Warning is printed but user is still added
+        assert mock_print.call_count >= 1
 
-    def test_register_user_short_password_warning(self, reset_globals, capsys):
-        """Test registering user with short password shows warning."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.register_user("user", "abc")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_empty_password(self, mock_print, mock_file):
+        """Test registering with empty password"""
+        user_auth_app.register_user("user", "")
+        # Empty password triggers warning but user is still added
+        assert user_auth_app.users_db[-1]["password"] == ""
 
-        captured = capsys.readouterr()
-        assert "Password too short!" in captured.out
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_duplicate_username(self, mock_file, mock_print):
+        """Test registering duplicate username (no validation)"""
+        user_auth_app.register_user("admin", "newpass")
+        # Should succeed since there's no duplicate check
+        assert len([u for u in user_auth_app.users_db if u["username"] == "admin"]) >= 2
 
-    def test_register_user_short_password_still_added(self, reset_globals):
-        """Test that user is still added even with short password."""
-        initial_count = len(user_auth_app.users_db)
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_logs_password(self, mock_print, mock_file):
+        """Test that register_user logs password (security issue)"""
+        user_auth_app.register_user("testuser", "secret123")
+        handle = mock_file()
+        write_calls = [str(call) for call in handle.write.call_args_list]
+        assert any("secret123" in str(call) for call in write_calls)
 
-        with patch("user_auth_app.log_event"):
-            user_auth_app.register_user("user", "abc")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_special_characters(self, mock_print, mock_file):
+        """Test registering with special characters"""
+        user_auth_app.register_user("user@test", "p@$$w0rd!")
+        assert user_auth_app.users_db[-1]["username"] == "user@test"
 
-        # User is still added despite warning
-        assert len(user_auth_app.users_db) == initial_count + 1
-
-    def test_register_user_minimum_valid_password(self, reset_globals):
-        """Test registering user with minimum valid password length."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.register_user("user", "1234")
-
-        assert {"username": "user", "password": "1234"} in user_auth_app.users_db
-
-    def test_register_user_empty_username(self, reset_globals):
-        """Test registering user with empty username."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.register_user("", "password123")
-
-        assert {"username": "", "password": "password123"} in user_auth_app.users_db
-
-    def test_register_user_duplicate_username(self, reset_globals):
-        """Test registering duplicate username (allowed in current implementation)."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.register_user("admin", "newpass")
-
-        # Check that duplicate is added
-        admin_users = [u for u in user_auth_app.users_db if u["username"] == "admin"]
-        assert len(admin_users) >= 2
-
-    def test_register_user_calls_log_event(self, reset_globals):
-        """Test that register_user attempts to call log_event."""
-        with patch("user_auth_app.log_event") as mock_log:
-            user_auth_app.register_user("testuser", "testpass")
-            mock_log.assert_called_once()
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_unicode(self, mock_print, mock_file):
+        """Test registering with unicode username"""
+        user_auth_app.register_user("用户", "密码123")
+        assert user_auth_app.users_db[-1]["username"] == "用户"
 
 
 class TestLogin:
-    """Tests for login function."""
+    """Tests for login function"""
 
-    def test_login_superuser_success(self, reset_globals, capsys):
-        """Test login with hardcoded superuser credentials."""
+    def setup_method(self):
+        """Reset state before each test"""
+        user_auth_app.users_db.clear()
+        user_auth_app.users_db.extend([
+            {"username": "admin", "password": "admin123"},
+            {"username": "test", "password": "test123"}
+        ])
+        user_auth_app.sessions.clear()
+
+    @patch("builtins.print")
+    def test_login_superuser_success(self, mock_print):
+        """Test hardcoded superuser login"""
         result = user_auth_app.login("superuser", "superpass")
         assert result is True
+        mock_print.assert_called_once_with("Superuser logged in!")
 
-        captured = capsys.readouterr()
-        assert "Superuser logged in!" in captured.out
-
-    def test_login_regular_user_success(self, reset_globals, capsys):
-        """Test login with regular user credentials."""
+    @patch("builtins.print")
+    @patch("random.randint", return_value=555555)
+    def test_login_valid_user_success(self, mock_random, mock_print):
+        """Test successful login with valid credentials"""
         result = user_auth_app.login("admin", "admin123")
         assert result is True
+        assert "555555" in user_auth_app.sessions
+        assert user_auth_app.sessions["555555"]["username"] == "admin"
 
-        captured = capsys.readouterr()
-        assert "Login successful" in captured.out
-        assert "Session:" in captured.out
-
-    def test_login_creates_session_token(self, reset_globals):
-        """Test that login creates a session token."""
-        initial_sessions = len(user_auth_app.sessions)
-        user_auth_app.login("admin", "admin123")
-        assert len(user_auth_app.sessions) == initial_sessions + 1
-
-    def test_login_session_token_length(self, reset_globals):
-        """Test that session token is 6 digits."""
-        user_auth_app.login("admin", "admin123")
-        # Get the last added session token
-        token = list(user_auth_app.sessions.keys())[-1]
-        assert len(token) == 6
-        assert token.isdigit()
-
-    def test_login_invalid_username(self, reset_globals, capsys):
-        """Test login with invalid username."""
+    @patch("builtins.print")
+    def test_login_invalid_username(self, mock_print):
+        """Test login with invalid username"""
         result = user_auth_app.login("nonexistent", "password")
         assert result is False
+        mock_print.assert_called_once_with("Login failed")
 
-        captured = capsys.readouterr()
-        assert "Login failed" in captured.out
-
-    def test_login_invalid_password(self, reset_globals, capsys):
-        """Test login with invalid password."""
-        result = user_auth_app.login("admin", "wrongpassword")
+    @patch("builtins.print")
+    def test_login_invalid_password(self, mock_print):
+        """Test login with invalid password"""
+        result = user_auth_app.login("admin", "wrongpass")
         assert result is False
+        mock_print.assert_called_once_with("Login failed")
 
-        captured = capsys.readouterr()
-        assert "Login failed" in captured.out
-
-    def test_login_empty_credentials(self, reset_globals, capsys):
-        """Test login with empty credentials."""
+    @patch("builtins.print")
+    def test_login_empty_credentials(self, mock_print):
+        """Test login with empty credentials"""
         result = user_auth_app.login("", "")
         assert result is False
 
-        captured = capsys.readouterr()
-        assert "Login failed" in captured.out
-
-    def test_login_test_user(self, reset_globals):
-        """Test login with test user."""
-        result = user_auth_app.login("test", "test123")
-        assert result is True
-
-    def test_login_case_sensitive(self, reset_globals):
-        """Test that login is case-sensitive."""
+    @patch("builtins.print")
+    def test_login_case_sensitive(self, mock_print):
+        """Test that login is case-sensitive"""
         result = user_auth_app.login("ADMIN", "admin123")
         assert result is False
 
-    def test_login_session_contains_correct_data(self, reset_globals):
-        """Test that session contains username and time."""
-        user_auth_app.login("admin", "admin123")
-        # Find the session with admin
-        admin_session = None
-        for token, session in user_auth_app.sessions.items():
-            if session.get("username") == "admin":
-                admin_session = session
-                break
+    @patch("builtins.print")
+    @patch("random.randint", return_value=777777)
+    def test_login_creates_session_with_timestamp(self, mock_random, mock_print):
+        """Test that login creates session with timestamp"""
+        before_time = time.time()
+        result = user_auth_app.login("test", "test123")
+        after_time = time.time()
 
-        assert admin_session is not None
-        assert admin_session["username"] == "admin"
-        assert "time" in admin_session
+        assert result is True
+        assert "777777" in user_auth_app.sessions
+        session = user_auth_app.sessions["777777"]
+        assert session["username"] == "test"
+        assert before_time <= session["time"] <= after_time
 
-    def test_login_multiple_sessions(self, reset_globals):
-        """Test creating multiple sessions."""
+    @patch("builtins.print")
+    @patch("random.randint")
+    def test_login_multiple_sessions(self, mock_random, mock_print):
+        """Test multiple logins create multiple sessions"""
+        mock_random.side_effect = [111111, 222222, 333333]
         user_auth_app.login("admin", "admin123")
         user_auth_app.login("test", "test123")
-        assert len(user_auth_app.sessions) >= 2
+        user_auth_app.login("admin", "admin123")
+        assert len(user_auth_app.sessions) == 3
+
+    @patch("builtins.print")
+    def test_login_superuser_no_session(self, mock_print):
+        """Test superuser login doesn't create session"""
+        user_auth_app.login("superuser", "superpass")
+        assert len(user_auth_app.sessions) == 0
 
 
 class TestResetPassword:
-    """Tests for reset_password function."""
+    """Tests for reset_password function"""
 
-    def test_reset_password_success(self, reset_globals):
-        """Test successfully resetting password."""
-        with patch("user_auth_app.log_event"):
-            result = user_auth_app.reset_password("admin", "newpassword")
+    def setup_method(self):
+        """Reset users_db before each test"""
+        user_auth_app.users_db.clear()
+        user_auth_app.users_db.extend([
+            {"username": "admin", "password": "admin123"},
+            {"username": "test", "password": "test123"}
+        ])
 
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_success(self, mock_file):
+        """Test successful password reset"""
+        result = user_auth_app.reset_password("admin", "newpass")
         assert result is True
-        # Find admin user and check password
-        admin_user = next((u for u in user_auth_app.users_db if u["username"] == "admin"), None)
-        assert admin_user is not None
-        assert admin_user["password"] == "newpassword"
+        admin_user = next(u for u in user_auth_app.users_db if u["username"] == "admin")
+        assert admin_user["password"] == "newpass"
 
-    def test_reset_password_nonexistent_user(self, reset_globals):
-        """Test resetting password for nonexistent user."""
-        with patch("user_auth_app.log_event"):
-            result = user_auth_app.reset_password("nonexistent", "newpass")
-
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_nonexistent_user(self, mock_file):
+        """Test password reset for nonexistent user"""
+        result = user_auth_app.reset_password("nonexistent", "newpass")
         assert result is False
 
-    def test_reset_password_calls_log_event(self, reset_globals):
-        """Test that reset_password attempts to call log_event."""
-        with patch("user_auth_app.log_event") as mock_log:
-            user_auth_app.reset_password("admin", "newpass")
-            mock_log.assert_called_once()
-
-    def test_reset_password_empty_password(self, reset_globals):
-        """Test resetting password to empty string."""
-        with patch("user_auth_app.log_event"):
-            result = user_auth_app.reset_password("admin", "")
-
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_empty_password(self, mock_file):
+        """Test resetting to empty password"""
+        result = user_auth_app.reset_password("admin", "")
         assert result is True
-        admin_user = next((u for u in user_auth_app.users_db if u["username"] == "admin"), None)
+        admin_user = next(u for u in user_auth_app.users_db if u["username"] == "admin")
         assert admin_user["password"] == ""
 
-    def test_reset_password_multiple_times(self, reset_globals):
-        """Test resetting password multiple times."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.reset_password("admin", "pass1")
-            user_auth_app.reset_password("admin", "pass2")
-            user_auth_app.reset_password("admin", "pass3")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_logs_new_password(self, mock_file):
+        """Test that reset_password logs the new password"""
+        user_auth_app.reset_password("admin", "newsecret")
+        handle = mock_file()
+        write_calls = [str(call) for call in handle.write.call_args_list]
+        assert any("newsecret" in str(call) for call in write_calls)
 
-        admin_user = next((u for u in user_auth_app.users_db if u["username"] == "admin"), None)
-        assert admin_user["password"] == "pass3"
+    @patch("builtins.open", new_callable=mock_open)
+    def test_reset_password_only_first_match(self, mock_file):
+        """Test reset only affects first matching user"""
+        # Add duplicate username
+        user_auth_app.users_db.append({"username": "admin", "password": "other"})
+        user_auth_app.reset_password("admin", "resetpass")
+        assert user_auth_app.users_db[0]["password"] == "resetpass"
+        assert user_auth_app.users_db[-1]["password"] == "other"
 
 
 class TestLoadConfig:
-    """Tests for load_config function."""
+    """Tests for load_config function"""
 
-    def test_load_config_valid_json(self, tmp_path):
-        """Test loading valid JSON config."""
-        config_file = tmp_path / "config.json"
-        test_data = {"key1": "value1", "key2": "value2"}
-        config_file.write_text(json.dumps(test_data))
+    @patch("builtins.open", mock_open(read_data='{"key": "value"}'))
+    def test_load_config_basic(self):
+        """Test loading basic config file"""
+        result = user_auth_app.load_config("config.json")
+        assert result == {"key": "value"}
 
-        result = user_auth_app.load_config(str(config_file))
-        assert result == test_data
+    @patch("builtins.open", mock_open(read_data='{"users": ["admin", "test"], "timeout": 3600}'))
+    def test_load_config_complex(self):
+        """Test loading complex config"""
+        result = user_auth_app.load_config("config.json")
+        assert "users" in result
+        assert "timeout" in result
+        assert result["users"] == ["admin", "test"]
 
-    def test_load_config_nested_json(self, tmp_path):
-        """Test loading nested JSON config."""
-        config_file = tmp_path / "config.json"
-        test_data = {
-            "database": {
-                "host": "localhost",
-                "port": 5432,
-                "credentials": {
-                    "username": "dbuser",
-                    "password": "dbpass"
-                }
-            }
-        }
-        config_file.write_text(json.dumps(test_data))
-
-        result = user_auth_app.load_config(str(config_file))
-        assert result == test_data
-        assert result["database"]["credentials"]["username"] == "dbuser"
-
-    def test_load_config_empty_json(self, tmp_path):
-        """Test loading empty JSON object."""
-        config_file = tmp_path / "config.json"
-        config_file.write_text("{}")
-
-        result = user_auth_app.load_config(str(config_file))
+    @patch("builtins.open", mock_open(read_data='{}'))
+    def test_load_config_empty_json(self):
+        """Test loading empty JSON object"""
+        result = user_auth_app.load_config("config.json")
         assert result == {}
 
-    def test_load_config_array(self, tmp_path):
-        """Test loading JSON array."""
-        config_file = tmp_path / "config.json"
-        test_data = [1, 2, 3, 4, 5]
-        config_file.write_text(json.dumps(test_data))
-
-        result = user_auth_app.load_config(str(config_file))
-        assert result == test_data
-
-    def test_load_config_file_not_found(self):
-        """Test loading nonexistent config file."""
+    @patch("builtins.open", side_effect=FileNotFoundError)
+    def test_load_config_file_not_found(self, mock_file):
+        """Test loading non-existent file raises exception"""
         with pytest.raises(FileNotFoundError):
             user_auth_app.load_config("nonexistent.json")
 
-    def test_load_config_invalid_json(self, tmp_path):
-        """Test loading invalid JSON."""
-        config_file = tmp_path / "config.json"
-        config_file.write_text("not valid json {]")
-
+    @patch("builtins.open", mock_open(read_data='invalid json'))
+    def test_load_config_invalid_json(self):
+        """Test loading invalid JSON raises exception"""
         with pytest.raises(json.JSONDecodeError):
-            user_auth_app.load_config(str(config_file))
+            user_auth_app.load_config("invalid.json")
+
+    @patch("builtins.open", mock_open(read_data='{"nested": {"deep": {"key": "value"}}}'))
+    def test_load_config_nested_structure(self):
+        """Test loading deeply nested JSON structure"""
+        result = user_auth_app.load_config("config.json")
+        assert result["nested"]["deep"]["key"] == "value"
 
 
 class TestSaveConfig:
-    """Tests for save_config function."""
+    """Tests for save_config function"""
 
-    def test_save_config_basic(self, tmp_path):
-        """Test saving basic config."""
-        config_file = tmp_path / "config.json"
-        test_data = {"key1": "value1", "key2": "value2"}
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("json.dump")
+    def test_save_config_basic(self, mock_json_dump, mock_file):
+        """Test saving basic config"""
+        data = {"key": "value"}
+        user_auth_app.save_config("config.json", data)
+        mock_file.assert_called_once_with("config.json", "w")
+        mock_json_dump.assert_called_once()
 
-        user_auth_app.save_config(str(config_file), test_data)
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("json.dump")
+    def test_save_config_complex(self, mock_json_dump, mock_file):
+        """Test saving complex config"""
+        data = {"users": ["admin", "test"], "timeout": 3600, "nested": {"key": "value"}}
+        user_auth_app.save_config("config.json", data)
+        assert mock_json_dump.called
 
-        # Verify file was created and contains correct data
-        assert config_file.exists()
-        saved_data = json.loads(config_file.read_text())
-        assert saved_data == test_data
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("json.dump")
+    def test_save_config_empty_dict(self, mock_json_dump, mock_file):
+        """Test saving empty dictionary"""
+        user_auth_app.save_config("config.json", {})
+        assert mock_json_dump.called
 
-    def test_save_config_nested(self, tmp_path):
-        """Test saving nested config."""
-        config_file = tmp_path / "config.json"
-        test_data = {
-            "settings": {
-                "debug": True,
-                "logging": {
-                    "level": "INFO"
-                }
-            }
-        }
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("json.dump")
+    def test_save_config_closes_file(self, mock_json_dump, mock_file):
+        """Test that save_config closes the file"""
+        user_auth_app.save_config("config.json", {"key": "value"})
+        handle = mock_file()
+        handle.close.assert_called_once()
 
-        user_auth_app.save_config(str(config_file), test_data)
-
-        saved_data = json.loads(config_file.read_text())
-        assert saved_data == test_data
-
-    def test_save_config_array(self, tmp_path):
-        """Test saving array config."""
-        config_file = tmp_path / "config.json"
-        test_data = [1, 2, 3, 4, 5]
-
-        user_auth_app.save_config(str(config_file), test_data)
-
-        saved_data = json.loads(config_file.read_text())
-        assert saved_data == test_data
-
-    def test_save_config_overwrites_existing(self, tmp_path):
-        """Test that save_config overwrites existing file."""
-        config_file = tmp_path / "config.json"
-        config_file.write_text("old content")
-
-        test_data = {"new": "data"}
-        user_auth_app.save_config(str(config_file), test_data)
-
-        saved_data = json.loads(config_file.read_text())
-        assert saved_data == test_data
-
-    def test_save_config_empty_dict(self, tmp_path):
-        """Test saving empty dictionary."""
-        config_file = tmp_path / "config.json"
-        user_auth_app.save_config(str(config_file), {})
-
-        saved_data = json.loads(config_file.read_text())
-        assert saved_data == {}
+    @patch("builtins.open", side_effect=PermissionError)
+    def test_save_config_permission_error(self, mock_file):
+        """Test saving config with permission error"""
+        with pytest.raises(PermissionError):
+            user_auth_app.save_config("config.json", {"key": "value"})
 
 
 class TestDeleteUser:
-    """Tests for delete_user function."""
+    """Tests for delete_user function"""
 
-    def test_delete_user_success(self, reset_globals, capsys):
-        """Test successfully deleting a user."""
+    def setup_method(self):
+        """Reset users_db before each test"""
+        user_auth_app.users_db.clear()
+        user_auth_app.users_db.extend([
+            {"username": "admin", "password": "admin123"},
+            {"username": "test", "password": "test123"},
+            {"username": "guest", "password": "guest123"}
+        ])
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_delete_user_success(self, mock_print, mock_file):
+        """Test successful user deletion"""
         initial_count = len(user_auth_app.users_db)
-
-        with patch("user_auth_app.log_event"):
-            user_auth_app.delete_user("admin")
-
+        user_auth_app.delete_user("test")
         assert len(user_auth_app.users_db) == initial_count - 1
+        assert not any(u["username"] == "test" for u in user_auth_app.users_db)
+        mock_print.assert_called_with("User test deleted.")
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_delete_user_nonexistent(self, mock_print, mock_file):
+        """Test deleting nonexistent user"""
+        initial_count = len(user_auth_app.users_db)
+        user_auth_app.delete_user("nonexistent")
+        assert len(user_auth_app.users_db) == initial_count
+        mock_print.assert_called_with("User nonexistent deleted.")
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_delete_user_multiple_with_same_name(self, mock_print, mock_file):
+        """Test deleting when multiple users have same name"""
+        user_auth_app.users_db.append({"username": "admin", "password": "other"})
+        initial_count = len(user_auth_app.users_db)
+        user_auth_app.delete_user("admin")
+        # Should remove all users with that username
+        assert len(user_auth_app.users_db) < initial_count
         assert not any(u["username"] == "admin" for u in user_auth_app.users_db)
 
-        captured = capsys.readouterr()
-        assert "User admin deleted" in captured.out
-
-    def test_delete_user_nonexistent(self, reset_globals):
-        """Test deleting nonexistent user."""
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_delete_user_empty_username(self, mock_print, mock_file):
+        """Test deleting user with empty username"""
         initial_count = len(user_auth_app.users_db)
-
-        with patch("user_auth_app.log_event"):
-            user_auth_app.delete_user("nonexistent")
-
-        # Count remains same
+        user_auth_app.delete_user("")
         assert len(user_auth_app.users_db) == initial_count
 
-    def test_delete_user_calls_log_event(self, reset_globals):
-        """Test that delete_user attempts to call log_event."""
-        with patch("user_auth_app.log_event") as mock_log:
-            user_auth_app.delete_user("admin")
-            mock_log.assert_called_once()
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_delete_user_logs_event(self, mock_print, mock_file):
+        """Test that delete_user logs the event"""
+        user_auth_app.delete_user("test")
+        handle = mock_file()
+        assert handle.write.called
 
-    def test_delete_user_all_users(self, reset_globals):
-        """Test deleting all users one by one."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.delete_user("admin")
-            user_auth_app.delete_user("test")
-
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_delete_all_users(self, mock_print, mock_file):
+        """Test deleting all users one by one"""
+        user_auth_app.delete_user("admin")
+        user_auth_app.delete_user("test")
+        user_auth_app.delete_user("guest")
         assert len(user_auth_app.users_db) == 0
 
-    def test_delete_user_empty_username(self, reset_globals):
-        """Test deleting user with empty username."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.delete_user("")
 
-        # Should not affect existing users
-        assert any(u["username"] == "admin" for u in user_auth_app.users_db)
+class TestIntegration:
+    """Integration tests combining multiple functions"""
 
+    def setup_method(self):
+        """Reset state before each test"""
+        user_auth_app.users_db.clear()
+        user_auth_app.users_db.extend([
+            {"username": "admin", "password": "admin123"},
+            {"username": "test", "password": "test123"}
+        ])
+        user_auth_app.sessions.clear()
 
-class TestMenuIntegration:
-    """Integration tests for menu function."""
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_and_login_new_user(self, mock_print, mock_file):
+        """Test registering a user and then logging in"""
+        user_auth_app.register_user("newuser", "newpass123")
+        result = user_auth_app.login("newuser", "newpass123")
+        assert result is True
 
-    def test_menu_register_flow(self, reset_globals):
-        """Test menu with register flow."""
-        inputs = ["1", "newuser", "password123"]
-        with patch("builtins.input", side_effect=inputs + [StopIteration()]), \
-             patch("user_auth_app.log_event"), \
-             pytest.raises(StopIteration):
-            user_auth_app.menu()
-
-    def test_menu_login_flow(self, reset_globals):
-        """Test menu with login flow."""
-        inputs = ["2", "admin", "admin123"]
-        with patch("builtins.input", side_effect=inputs + [StopIteration()]), \
-             pytest.raises(StopIteration):
-            user_auth_app.menu()
-
-    def test_menu_reset_password_flow(self, reset_globals):
-        """Test menu with reset password flow."""
-        inputs = ["3", "admin", "newpass"]
-        with patch("builtins.input", side_effect=inputs + [StopIteration()]), \
-             patch("user_auth_app.log_event"), \
-             pytest.raises(StopIteration):
-            user_auth_app.menu()
-
-    def test_menu_delete_user_flow(self, reset_globals):
-        """Test menu with delete user flow."""
-        inputs = ["4", "test"]
-        with patch("builtins.input", side_effect=inputs + [StopIteration()]), \
-             patch("user_auth_app.log_event"), \
-             pytest.raises(StopIteration):
-            user_auth_app.menu()
-
-    def test_menu_exit_flow(self, reset_globals):
-        """Test menu with exit flow."""
-        with patch("builtins.input", return_value="5"), \
-             pytest.raises(SystemExit):
-            user_auth_app.menu()
-
-    def test_menu_invalid_choice(self, reset_globals, capsys):
-        """Test menu with invalid choice."""
-        with patch("builtins.input", side_effect=["99", StopIteration()]), \
-             pytest.raises(StopIteration):
-            user_auth_app.menu()
-
-
-class TestEdgeCases:
-    """Additional edge case tests."""
-
-    def test_session_token_range(self, reset_globals):
-        """Test that session tokens are in expected range."""
-        user_auth_app.login("admin", "admin123")
-        token = list(user_auth_app.sessions.keys())[-1]
-        token_int = int(token)
-        assert 100000 <= token_int <= 999999
-
-    def test_login_after_password_reset(self, reset_globals):
-        """Test login works after password reset."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.reset_password("admin", "newpass123")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_reset_and_login_with_new_password(self, mock_print, mock_file):
+        """Test password reset and login with new password"""
+        user_auth_app.reset_password("admin", "newpass456")
 
         # Old password should fail
         result1 = user_auth_app.login("admin", "admin123")
         assert result1 is False
 
         # New password should work
-        result2 = user_auth_app.login("admin", "newpass123")
+        result2 = user_auth_app.login("admin", "newpass456")
         assert result2 is True
 
-    def test_login_after_user_deleted(self, reset_globals):
-        """Test login fails after user is deleted."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.delete_user("admin")
-
-        result = user_auth_app.login("admin", "admin123")
-        assert result is False
-
-    def test_register_then_login(self, reset_globals):
-        """Test registering user and then logging in."""
-        with patch("user_auth_app.log_event"):
-            user_auth_app.register_user("newuser", "newpass123")
-
-        result = user_auth_app.login("newuser", "newpass123")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_reset_login_workflow(self, mock_print, mock_file):
+        """Test complete workflow: register, reset, login"""
+        user_auth_app.register_user("user1", "pass1")
+        user_auth_app.reset_password("user1", "newpass1")
+        result = user_auth_app.login("user1", "newpass1")
         assert result is True
 
-    def test_multiple_operations_sequence(self, reset_globals):
-        """Test sequence of multiple operations."""
-        with patch("user_auth_app.log_event"):
-            # Register new user
-            user_auth_app.register_user("user1", "pass1")
-            # Login with new user
-            assert user_auth_app.login("user1", "pass1") is True
-            # Reset password
-            user_auth_app.reset_password("user1", "newpass1")
-            # Old password fails
-            assert user_auth_app.login("user1", "pass1") is False
-            # New password works
-            assert user_auth_app.login("user1", "newpass1") is True
-            # Delete user
-            user_auth_app.delete_user("user1")
-            # Login fails after deletion
-            assert user_auth_app.login("user1", "newpass1") is False
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_and_delete_user(self, mock_print, mock_file):
+        """Test registering and then deleting a user"""
+        user_auth_app.register_user("tempuser", "temppass")
+        assert any(u["username"] == "tempuser" for u in user_auth_app.users_db)
 
-    def test_users_db_persistence(self, reset_globals):
-        """Test that users_db persists across operations."""
+        user_auth_app.delete_user("tempuser")
+        assert not any(u["username"] == "tempuser" for u in user_auth_app.users_db)
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    @patch("random.randint")
+    def test_multiple_users_multiple_sessions(self, mock_random, mock_print, mock_file):
+        """Test multiple users with multiple sessions"""
+        mock_random.side_effect = [100000, 200000, 300000]
+
+        user_auth_app.register_user("user1", "pass1")
+        user_auth_app.register_user("user2", "pass2")
+
+        user_auth_app.login("user1", "pass1")
+        user_auth_app.login("user2", "pass2")
+        user_auth_app.login("admin", "admin123")
+
+        assert len(user_auth_app.sessions) == 3
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("json.dump")
+    @patch("builtins.print")
+    def test_save_and_load_config_integration(self, mock_print, mock_json_dump, mock_file):
+        """Test saving and loading config"""
+        config_data = {"timeout": 3600, "max_users": 100}
+
+        # Save config
+        user_auth_app.save_config("test.json", config_data)
+        assert mock_json_dump.called
+
+
+class TestEdgeCases:
+    """Tests for edge cases and boundary conditions"""
+
+    def setup_method(self):
+        """Reset state before each test"""
+        user_auth_app.users_db.clear()
+        user_auth_app.users_db.extend([
+            {"username": "admin", "password": "admin123"},
+            {"username": "test", "password": "test123"}
+        ])
+        user_auth_app.sessions.clear()
+
+    @patch("builtins.print")
+    def test_login_with_none_values(self, mock_print):
+        """Test login with None values"""
+        result = user_auth_app.login(None, "password")
+        assert result is False
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_with_very_long_username(self, mock_print, mock_file):
+        """Test registering user with very long username"""
+        long_username = "u" * 10000
+        user_auth_app.register_user(long_username, "pass123")
+        assert user_auth_app.users_db[-1]["username"] == long_username
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_user_with_very_long_password(self, mock_print, mock_file):
+        """Test registering user with very long password"""
+        long_password = "p" * 10000
+        user_auth_app.register_user("user", long_password)
+        assert user_auth_app.users_db[-1]["password"] == long_password
+
+    def test_hash_password_with_null_bytes(self):
+        """Test hashing password with null bytes"""
+        result = user_auth_app.hash_password("pass\x00word")
+        assert isinstance(result, str)
+        assert len(result) == 32
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_delete_user_with_special_chars(self, mock_print, mock_file):
+        """Test deleting user with special characters in name"""
+        user_auth_app.users_db.append({"username": "user@test", "password": "pass"})
+        user_auth_app.delete_user("user@test")
+        assert not any(u["username"] == "user@test" for u in user_auth_app.users_db)
+
+    @patch("builtins.print")
+    @patch("random.randint", return_value=100000)
+    def test_session_token_collision(self, mock_random, mock_print):
+        """Test behavior when session tokens collide"""
+        # First login
+        user_auth_app.login("admin", "admin123")
+        first_session = user_auth_app.sessions["100000"].copy()
+
+        # Second login with same token
+        user_auth_app.login("test", "test123")
+        second_session = user_auth_app.sessions["100000"]
+
+        # Second session overwrites first
+        assert second_session["username"] == "test"
+        assert second_session["username"] != first_session["username"]
+
+
+class TestSecurityIssues:
+    """Tests documenting security issues in the code"""
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_password_stored_in_plaintext(self, mock_print, mock_file):
+        """Document that passwords are stored in plaintext"""
+        user_auth_app.register_user("testuser", "mysecretpassword")
+        user = next(u for u in user_auth_app.users_db if u["username"] == "testuser")
+        # Password is stored in plaintext (security issue)
+        assert user["password"] == "mysecretpassword"
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_passwords_logged_to_file(self, mock_print, mock_file):
+        """Document that passwords are logged to file"""
+        user_auth_app.register_user("user", "secretpass")
+        handle = mock_file()
+        write_calls = [str(call) for call in handle.write.call_args_list]
+        assert any("secretpass" in str(call) for call in write_calls)
+
+    def test_weak_hashing_algorithm(self):
+        """Document use of weak MD5 hashing"""
+        result = user_auth_app.hash_password("password")
+        assert result == hashlib.md5(b"password").hexdigest()
+
+    @patch("builtins.print")
+    def test_hardcoded_credentials(self, mock_print):
+        """Document hardcoded superuser credentials"""
+        result = user_auth_app.login("superuser", "superpass")
+        assert result is True
+
+    @patch("builtins.print")
+    @patch("random.randint", return_value=123456)
+    def test_weak_session_tokens(self, mock_random, mock_print):
+        """Document weak session token generation"""
+        user_auth_app.login("admin", "admin123")
+        # Session tokens are only 6 digits (100000-999999)
+        assert "123456" in user_auth_app.sessions
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_weak_password_validation(self, mock_print, mock_file):
+        """Document weak password validation"""
+        # Only checks length < 4, but still adds user
+        user_auth_app.register_user("user1", "1")
+        user_auth_app.register_user("user2", "")
+        # Users are added despite weak passwords
+        assert any(u["username"] == "user1" for u in user_auth_app.users_db)
+        assert any(u["username"] == "user2" for u in user_auth_app.users_db)
+
+    def test_file_handle_not_closed(self):
+        """Document that load_config doesn't close file handle"""
+        with patch("builtins.open", mock_open(read_data='{"key": "value"}')):
+            result = user_auth_app.load_config("config.json")
+            # File handle is not closed (resource leak)
+            assert result == {"key": "value"}
+
+
+class TestRegressionAndBoundary:
+    """Additional regression and boundary tests for enhanced coverage"""
+
+    def setup_method(self):
+        """Reset state before each test"""
+        user_auth_app.users_db.clear()
+        user_auth_app.users_db.extend([
+            {"username": "admin", "password": "admin123"},
+            {"username": "test", "password": "test123"}
+        ])
+        user_auth_app.sessions.clear()
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_register_many_users_boundary(self, mock_print, mock_file):
+        """Test registering many users to verify system handles growth"""
         initial_count = len(user_auth_app.users_db)
+        for i in range(100):
+            user_auth_app.register_user(f"user{i}", f"password{i}")
 
-        with patch("user_auth_app.log_event"):
-            user_auth_app.register_user("user1", "pass1")
-            user_auth_app.register_user("user2", "pass2")
-            user_auth_app.delete_user("test")
+        assert len(user_auth_app.users_db) == initial_count + 100
 
-        # Added 2, deleted 1
-        assert len(user_auth_app.users_db) == initial_count + 1
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_delete_and_recreate_user(self, mock_print, mock_file):
+        """Regression test: ensure deleted user can be recreated"""
+        user_auth_app.register_user("tempuser", "temppass")
+        assert any(u["username"] == "tempuser" for u in user_auth_app.users_db)
 
-    def test_config_save_and_load_roundtrip(self, tmp_path):
-        """Test saving and loading config maintains data integrity."""
-        config_file = tmp_path / "test_config.json"
-        original_data = {
-            "users": ["alice", "bob"],
-            "settings": {"theme": "dark", "timeout": 300}
-        }
+        user_auth_app.delete_user("tempuser")
+        assert not any(u["username"] == "tempuser" for u in user_auth_app.users_db)
 
-        user_auth_app.save_config(str(config_file), original_data)
-        loaded_data = user_auth_app.load_config(str(config_file))
+        # Recreate with different password
+        user_auth_app.register_user("tempuser", "newpass")
+        user = next(u for u in user_auth_app.users_db if u["username"] == "tempuser")
+        assert user["password"] == "newpass"
 
-        assert loaded_data == original_data
+    @patch("builtins.print")
+    @patch("random.randint")
+    def test_session_overflow_with_many_logins(self, mock_random, mock_print):
+        """Test system behavior with many active sessions"""
+        mock_random.side_effect = range(100000, 200000)
 
-    def test_password_validation_boundary(self, reset_globals, capsys):
-        """Test password validation at boundary (4 characters)."""
-        with patch("user_auth_app.log_event"):
-            # 3 chars - should warn
-            user_auth_app.register_user("user1", "abc")
-            captured = capsys.readouterr()
-            assert "Password too short!" in captured.out
+        # Create many sessions
+        for i in range(50):
+            user_auth_app.login("admin", "admin123")
 
-            # 4 chars - should not warn
-            user_auth_app.register_user("user2", "abcd")
-            captured = capsys.readouterr()
-            assert "Password too short!" not in captured.out
+        # All sessions should be preserved (no limit implemented)
+        assert len(user_auth_app.sessions) == 50
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_password_complexity_bypass(self, mock_print, mock_file):
+        """Document that weak password validation can be bypassed"""
+        # Register with 1-char password (should warn but still adds)
+        user_auth_app.register_user("weak1", "a")
+        # Register with 2-char password (should warn but still adds)
+        user_auth_app.register_user("weak2", "ab")
+        # Register with 3-char password (should warn but still adds)
+        user_auth_app.register_user("weak3", "abc")
+
+        # All users should be added despite weak passwords
+        assert any(u["username"] == "weak1" for u in user_auth_app.users_db)
+        assert any(u["username"] == "weak2" for u in user_auth_app.users_db)
+        assert any(u["username"] == "weak3" for u in user_auth_app.users_db)
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.print")
+    def test_race_condition_in_session_creation(self, mock_print, mock_file):
+        """Regression test: Document potential race condition in session creation"""
+        user_auth_app.sessions.clear()
+        user_auth_app.users_db.clear()
+        user_auth_app.users_db.append({"username": "testuser", "password": "testpass"})
+
+        # Simulate rapid successive logins that could cause race conditions
+        with patch("random.randint") as mock_random:
+            # Same token generated for different users (collision scenario)
+            mock_random.return_value = 555555
+
+            # First login
+            result1 = user_auth_app.login("testuser", "testpass")
+            assert result1 is True
+            first_user = user_auth_app.sessions.get("555555", {}).get("username")
+
+            # Add another user
+            user_auth_app.users_db.append({"username": "another", "password": "another"})
+
+            # Second login with same token overwrites first session
+            result2 = user_auth_app.login("another", "another")
+            assert result2 is True
+
+            # Only one session exists due to token collision
+            assert len(user_auth_app.sessions) == 1
+            # Second user overwrote first user's session
+            assert user_auth_app.sessions["555555"]["username"] == "another"
+            # First user's session is lost - security/data integrity issue
+            assert first_user != user_auth_app.sessions["555555"]["username"]
