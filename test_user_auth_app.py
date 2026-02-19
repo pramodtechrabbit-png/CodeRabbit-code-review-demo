@@ -73,20 +73,21 @@ class TestHashPassword:
 class TestLogEvent:
     """Tests for log_event function."""
 
-    def test_log_event_has_parameter_bug(self):
-        """Test that log_event has a bug (parameter name mismatch)."""
-        # The function parameter is 'messages' but it uses 'message' inside
-        # This test documents the bug exists
+    def test_log_event_writes_message(self):
+        """Test that log_event writes message to file."""
         with patch("user_auth_app.open", mock_open()) as mock_file:
-            with pytest.raises(NameError):
-                user_auth_app.log_event("Test message")
+            user_auth_app.log_event("Test message")
+            mock_file.assert_called_once_with("auth.log", "a")
+            handle = mock_file()
+            written = "".join([call[0][0] for call in handle.write.call_args_list])
+            assert "Test message" in written
 
     def test_log_event_function_signature(self):
-        """Test that log_event has incorrect parameter name."""
+        """Test that log_event has correct parameter name."""
         import inspect
         sig = inspect.signature(user_auth_app.log_event)
         params = list(sig.parameters.keys())
-        assert "messages" in params  # Parameter is named 'messages'
+        assert "message" in params  # Parameter is named 'message'
 
 
 class TestRegisterUser:
